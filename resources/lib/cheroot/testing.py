@@ -50,6 +50,8 @@ def cheroot_server(server_factory):
         else:
             break
 
+    httpserver.shutdown_timeout = 0  # Speed-up tests teardown
+
     threading.Thread(target=httpserver.safe_start).start()  # spawn it
     while not httpserver.ready:  # wait until fully initialized and bound
         time.sleep(0.1)
@@ -59,14 +61,14 @@ def cheroot_server(server_factory):
     httpserver.stop()  # destroy it
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture
 def wsgi_server():
     """Set up and tear down a Cheroot WSGI server instance."""
     for srv in cheroot_server(cheroot.wsgi.Server):
         yield srv
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture
 def native_server():
     """Set up and tear down a Cheroot HTTP server instance."""
     for srv in cheroot_server(cheroot.server.HTTPServer):
@@ -75,16 +77,23 @@ def native_server():
 
 class _TestClient:
     def __init__(self, server):
-        self._interface, self._host, self._port = _get_conn_data(server)
-        self._http_connection = self.get_connection()
+        self._interface, self._host, self._port = _get_conn_data(
+            server.bind_addr,
+        )
         self.server_instance = server
+        self._http_connection = self.get_connection()
 
     def get_connection(self):
         name = '{interface}:{port}'.format(
             interface=self._interface,
             port=self._port,
         )
-        return http_client.HTTPConnection(name)
+        conn_cls = (
+            http_client.HTTPConnection
+            if self.server_instance.ssl_adapter is None else
+            http_client.HTTPSConnection
+        )
+        return conn_cls(name)
 
     def request(
         self, uri, method='GET', headers=None, http_conn=None,
@@ -123,11 +132,11 @@ def _probe_ipv6_sock(interface):
     return False
 
 
-def _get_conn_data(server):
-    if isinstance(server.bind_addr, tuple):
-        host, port = server.bind_addr
+def _get_conn_data(bind_addr):
+    if isinstance(bind_addr, tuple):
+        host, port = bind_addr
     else:
-        host, port = server.bind_addr, 0
+        host, port = bind_addr, 0
 
     interface = webtest.interface(host)
 
